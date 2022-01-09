@@ -1,0 +1,4 @@
+{"sec_price_type_id": 0, "sec_price_type_code": "open"}
+{"sec_price_type_id": 1, "sec_price_type_code": "close"}
+{"sec_price_type_id": 2, "sec_price_type_code": "offer"}
+{"sec_price_type_id": 3, "sec_price_type_code": "bid"}
