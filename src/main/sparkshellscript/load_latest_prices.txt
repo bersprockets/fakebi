@@ -1,0 +1,111 @@
+sql("use prices")
+val home_candidate = sys.env("HOME")
+val home = if (!home_candidate.endsWith("/")) {
+  s"${home_candidate}/"
+} else {
+  home_candidate
+}
+
+// kludge so tat we can use this code as input to spark-shell
+val dataDateString = System.getProperty("data_date")
+if (dataDateString == null) {
+  throw new RuntimeException("No data date specified")
+}
+
+// create or overwrite last price partition for the data date
+sql(s"""
+  select sec_id, exchange_id, sec_price_type_id, max(price_dt) max_price_dt
+  from sec_price
+  where price_dt <= '$dataDateString'
+  group by sec_id, exchange_id, sec_price_type_id
+""").createOrReplaceTempView("sec_price_max_dt_vw")
+
+sql(s"""
+  select sp.sec_id, sp.exchange_id, sp.sec_price_type_id, sp.price, sp.price_dt
+  from sec_price sp
+  join sec_price_max_dt_vw spm
+  on sp.sec_id = spm.sec_id
+  and sp.exchange_id = spm.exchange_id
+  and sp.sec_price_type_id = spm.sec_price_type_id
+  and sp.price_dt = spm.max_price_dt
+""").createOrReplaceTempView("sec_price_last_vw")
+
+val columnNames2 = spark.read.table("sec_price_last").schema.map(_.name).init.mkString(", ")
+println(s"Columns for sec_price_last are $columnNames2")
+
+sql(s"""
+  insert overwrite table sec_price_last partition (data_dt = '$dataDateString')
+  select $columnNames2
+  from sec_price_last_vw
+""")
+
+// create denormalized table of latest prices
+
+sql(s"""
+  select sec_id, exchange_id, Map(sec_price_type_code, named_struct('price', price, 'price_dt', price_dt)) price_data
+  from sec_price_last spl
+  join sec_price_type spt
+  where spl.sec_price_type_id = spt.sec_price_type_id
+  and data_dt = '$dataDateString'
+""").createOrReplaceTempView("sec_price_last_map_vw")
+
+// create or replace temp view sec_price_map_list as
+sql("""
+  select sec_id, exchange_id, collect_list(price_data) price_list
+  from sec_price_last_map_vw
+  group by sec_id, exchange_id
+""").createOrReplaceTempView("sec_price_map_list_vw")
+
+// create or replace temp view sec_price_last_map_combo as
+sql("""
+  select sec_id, exchange_id,
+    case when size(price_list) = 4 then map_concat(price_list[0], price_list[1], price_list[2], price_list[3])
+         when size(price_list) = 3 then map_concat(price_list[0], price_list[1], price_list[2])
+         when size(price_list) = 2 then map_concat(price_list[0], price_list[1])
+         else price_list[0] end as price_map
+  from sec_price_map_list_vw
+""").createOrReplaceTempView("sec_price_last_map_combo_vw")
+
+// create or replace temp view sec_price_last_cols as
+sql("""
+  select sec_id, exchange_id, price_map['open']['price'] as open_price, price_map['open']['price_dt'] as open_price_dt,
+    price_map['close']['price'] as close_price, price_map['close']['price_dt'] as close_price_dt,
+    price_map['offer']['price'] as offer_price, price_map['offer']['price_dt'] as offer_price_dt,
+    price_map['bid']['price'] as bid_price, price_map['bid']['price_dt'] as bid_price_dt
+  from sec_price_last_map_combo_vw
+""").createOrReplaceTempView("sec_price_last_cols_vw")
+
+// create or replace temp view sec_price_last_max_price_dt as
+sql("""
+   select *, greatest(open_price_dt, close_price_dt, offer_price_dt, bid_price_dt) as max_price_dt
+   from sec_price_last_cols_vw
+""").createOrReplaceTempView("sec_price_last_max_price_dt_vw")
+
+// create or replace temp view sedols as
+sql("""
+  select se.*
+  from sec_external se
+  join sec_external_id_type seit
+  on se.sec_external_id_type_id = seit.sec_external_id_type_id
+  and seit.name = "sedol"
+""").createOrReplaceTempView("sedols")
+
+// create or replace temp view sec_price_last_with_sedol_first_pass as
+sql("""
+  select se.sec_external_id sedol, spl.*
+  from sec_price_last_max_price_dt_vw spl
+  left join sedols se
+  on spl.sec_id = se.sec_id
+  and spl.max_price_dt >= se.start_dt
+  and spl.max_price_dt < se.end_dt
+""").createOrReplaceTempView("sec_price_last_with_sedol_first_pass_vw")
+
+val totalDNCount = sql("select * from sec_price_last_with_sedol_first_pass_vw").count
+
+val noSedolDNCount = sql("""
+  select * from sec_price_last_with_sedol_first_pass_vw
+  where sedol != null
+""").count
+
+
+println(s"Total DN count is $totalDNCount; count with no sedol after first pass: $noSedolDNCount")

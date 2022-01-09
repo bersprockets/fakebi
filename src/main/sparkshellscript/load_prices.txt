@@ -1,0 +1,497 @@
+import org.apache.spark.storage.StorageLevel
+import org.apache.spark.sql.DataFrame
+
+import scala.util.Random
+
+sql("use prices")
+val home_candidate = sys.env("HOME")
+val home = if (!home_candidate.endsWith("/")) {
+  s"${home_candidate}/"
+} else {
+  home_candidate
+}
+
+// kludge so tat we can use this code as input to spark-shell
+val dataDateString = System.getProperty("data_date")
+if (dataDateString == null) {
+  throw new RuntimeException("No data date specified")
+}
+
+def normalize_feed_0(filenameOpt: Option[String] = None): (DataFrame, DataFrame) = {
+  val price_feed_schema = "isin string, exchange string, `date` date, open decimal(32,9), close decimal(32,9), bid decimal(32,9), offer decimal(32,9)"
+  val inputFilename = filenameOpt match {
+    case Some(filename) =>
+      filename
+    case _ =>
+      s"$home/testbed/price_test_data/prices_ex_${dataDateString}.json"
+  }
+  spark.read.schema(price_feed_schema).json(inputFilename).createOrReplaceTempView("price_feed_0_vw")
+
+  sql("""
+    select *, monotonically_increasing_id() temp_sec_id
+    from price_feed_0_vw
+  """).createOrReplaceTempView("price_feed_0_with_temp_id")
+
+  // create a temporary sec_external, using temp_sec_id to tie it back to the price data
+  val isin_type_id = sql("select sec_external_id_type_id from sec_external_id_type where name = 'isin'")
+    .collect()(0)(0) 
+
+  val secExternalTemp = sql(s"""select distinct isin sec_external_id, -1 country_id, temp_sec_id,
+                                  $isin_type_id as sec_external_id_type_id, `date` start_dt
+                                from price_feed_0_with_temp_id
+  """)
+
+  // resolve exchange ids
+  sql("""
+    select pf.*, ex.exchange_id
+    from price_feed_0_with_temp_id pf
+    join exchange ex
+    on pf.exchange = ex.exchange_code
+  """).createOrReplaceTempView("price_feed_0_with_exchange")
+
+  val priceTypeMap =
+    sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
+
+  val pricesTemp = sql(s"""
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    from price_feed_0_with_exchange
+    where open > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    from price_feed_0_with_exchange
+    where close > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    from price_feed_0_with_exchange
+    where offer > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    from price_feed_0_with_exchange
+    where bid > 0
+  """)
+  val priceCount = pricesTemp.count
+  println(s"Feed 0 has $priceCount prices")
+
+  (secExternalTemp, pricesTemp)
+}
+
+def normalize_feed_1(filenameOpt: Option[String] = None): (DataFrame, DataFrame) = {
+  val price_feed_schema = "isin string, exchange string, `date` date, open decimal(32,9), close decimal(32,9), bid decimal(32,9), offer decimal(32,9)"
+  val inputFilename = filenameOpt match {
+    case Some(filename) =>
+      filename
+    case _ =>
+      s"$home/testbed/price_test_data/prices_1_${dataDateString}.json"
+  }
+  spark.read.schema(price_feed_schema).json(inputFilename).createOrReplaceTempView("price_feed_1_vw")
+
+  sql("""
+    select *, monotonically_increasing_id() temp_sec_id
+    from price_feed_1_vw
+  """).createOrReplaceTempView("price_feed_1_with_temp_id")
+
+  // create a temporary sec_external, using temp_sec_id to tie it back to the price data
+  val isin_type_id = sql("select sec_external_id_type_id from sec_external_id_type where name = 'isin'")
+    .collect()(0)(0) 
+
+  val secExternalTemp = sql(s"""select distinct isin sec_external_id, -1 country_id, temp_sec_id,
+                                  $isin_type_id as sec_external_id_type_id, `date` start_dt
+                                from price_feed_1_with_temp_id
+  """)
+
+  // resolve exchange ids
+  sql("""
+    select pf.*, ex.exchange_id
+    from price_feed_1_with_temp_id pf
+    join exchange ex
+    on pf.exchange = ex.exchange_code
+  """).createOrReplaceTempView("price_feed_1_with_exchange")
+
+  val priceTypeMap =
+    sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
+
+  val pricesTemp = sql(s"""
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    from price_feed_1_with_exchange
+    where open > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    from price_feed_1_with_exchange
+    where close > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    from price_feed_1_with_exchange
+    where offer > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    from price_feed_1_with_exchange
+    where bid > 0
+  """)
+  val priceCount = pricesTemp.count
+  println(s"Feed 1 has $priceCount prices")
+
+  (secExternalTemp, pricesTemp)
+}
+
+def normalize_feed_2(filenameOpt: Option[String] = None): (DataFrame, DataFrame) = {
+  val price_feed_schema = "cusip string, feed_exchange_code String, `date` date, open decimal(32,9), close decimal(32,9), bid decimal(32,9), offer decimal(32,9)"
+  val inputFilename = filenameOpt match {
+    case Some(filename) =>
+      filename
+    case _ =>
+      s"$home/testbed/price_test_data/prices_us_${dataDateString}.csv"
+  }
+  spark.read.schema(price_feed_schema).csv(inputFilename).createOrReplaceTempView("price_feed_2_vw")
+
+  val exchangeLookupDf = Seq.tabulate(7) { id =>
+    (id, f"US$id%02d")
+  }.toDF("feed_exchange_code_as_int", "exchange_code")
+
+  exchangeLookupDf.createOrReplaceTempView("feed_exchange_code_lookup_vw")
+
+  sql("""
+    select pf.cusip, el.exchange_code, pf.date, pf.open, pf.close, pf.bid, pf.offer, monotonically_increasing_id() temp_sec_id
+    from price_feed_2_vw pf
+    join feed_exchange_code_lookup_vw el
+    on cast(pf.feed_exchange_code as int) = el.feed_exchange_code_as_int
+  """).createOrReplaceTempView("price_feed_2_with_temp_id")
+
+  // create a temporary sec_external, using temp_sec_id to tie it back to the price data
+  val cusip_type_id = sql("select sec_external_id_type_id from sec_external_id_type where name = 'cusip'")
+    .collect()(0)(0) 
+
+  val secExternalTemp = sql(s"""select distinct cusip sec_external_id, -1 country_id, temp_sec_id,
+                                  $cusip_type_id as sec_external_id_type_id, `date` start_dt
+                                from price_feed_2_with_temp_id
+  """)
+
+  // resolve exchange ids
+  sql("""
+    select pf.*, ex.exchange_id
+    from price_feed_2_with_temp_id pf
+    join exchange ex
+    on pf.exchange_code = ex.exchange_code
+  """).createOrReplaceTempView("price_feed_2_with_exchange")
+
+  val priceTypeMap =
+    sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
+
+  val pricesTemp = sql(s"""
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    from price_feed_2_with_exchange
+    where open > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    from price_feed_2_with_exchange
+    where close > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    from price_feed_2_with_exchange
+    where offer > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    from price_feed_2_with_exchange
+    where bid > 0
+  """)
+  val priceCount = pricesTemp.count
+  println(s"Feed 2 has $priceCount prices")
+
+  (secExternalTemp, pricesTemp)
+}
+
+def normalize_feed_3(filenameOpt: Option[String] = None): (DataFrame, DataFrame) = {
+  val price_feed_schema = "ticker string, exchange_code string, price_type, string, time_string string, price decimal(32,9)"
+  val inputFilename = filenameOpt match {
+    case Some(filename) =>
+      filename
+    case _ =>
+      s"$home/testbed/price_test_data/prices_emerging_${dataDateString}.csv"
+  }
+  spark.read.schema(price_feed_schema).csv(inputFilename).createOrReplaceTempView("price_feed_3_vw")
+
+  val exchangeLookupDf = Seq.tabulate(7) { id =>
+    (id, f"US$id%02d")
+  }.toDF("feed_exchange_code_as_int", "exchange_code")
+
+  exchangeLookupDf.createOrReplaceTempView("feed_exchange_code_lookup_vw")
+
+  sql("""
+    select pf.cusip, el.exchange_code, pf.date, pf.open, pf.close, pf.bid, pf.offer, monotonically_increasing_id() temp_sec_id
+    from price_feed_3_vw pf
+    join feed_exchange_code_lookup_vw el
+    on cast(pf.feed_exchange_code as int) = el.feed_exchange_code_as_int
+  """).createOrReplaceTempView("price_feed_3_with_temp_id")
+
+  // create a temporary sec_external, using temp_sec_id to tie it back to the price data
+  val cusip_type_id = sql("select sec_external_id_type_id from sec_external_id_type where name = 'cusip'")
+    .collect()(0)(0) 
+
+  val secExternalTemp = sql(s"""select distinct cusip sec_external_id, -1 country_id, temp_sec_id,
+                                  $cusip_type_id as sec_external_id_type_id, `date` start_dt
+                                from price_feed_3_with_temp_id
+  """)
+
+  // resolve exchange ids
+  sql("""
+    select pf.*, ex.exchange_id
+    from price_feed_3_with_temp_id pf
+    join exchange ex
+    on pf.exchange_code = ex.exchange_code
+  """).createOrReplaceTempView("price_feed_3_with_exchange")
+
+  val priceTypeMap =
+    sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
+
+  val pricesTemp = sql(s"""
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    from price_feed_3_with_exchange
+    where open > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    from price_feed_3_with_exchange
+    where close > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    from price_feed_3_with_exchange
+    where offer > 0
+    union all
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    from price_feed_3_with_exchange
+    where bid > 0
+  """)
+  val priceCount = pricesTemp.count
+  println(s"Feed 2 has $priceCount prices")
+
+  (secExternalTemp, pricesTemp)
+}
+
+def processFeed(secExternalTemp: DataFrame, pricesTemp: DataFrame): DataFrame = {
+  secExternalTemp.createOrReplaceTempView("sec_external_temp_vw")
+  pricesTemp.createOrReplaceTempView("prices_temp_vw")
+
+  sql("""
+     select set.*, se.sec_id
+     from sec_external_temp_vw set
+     left join sec_external se
+     on set.sec_external_id = se.sec_external_id
+     and set.sec_external_id_type_id = se.sec_external_id_type_id
+     and set.start_dt >= se.start_dt
+     and set.start_dt < se.end_dt
+   """).persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("sec_external_temp_first_pass_vw")
+
+   val unsetAfterFirstPass = sql("select * from sec_external_temp_first_pass_vw where sec_id is null").count
+   println(s"After first pass, $unsetAfterFirstPass identifiers are still unknown")
+
+  // find all external sec ids in the feed where the external id has expired
+  // but also has no newer external id of the same type
+  sql("""
+    select se.sec_id, se.sec_external_id_type_id, max(se.start_dt) max_start_dt
+    from sec_external se
+    join sec_external_temp_first_pass_vw set
+    on se.sec_external_id = set.sec_external_id
+    and se.sec_external_id_type_id = set.sec_external_id_type_id
+    and set.sec_id is null
+    and se.end_dt < set.start_dt
+    group by se.sec_id, se.sec_external_id_type_id
+  """).createOrReplaceTempView("sec_max_end_dt_vw")
+
+  sql("""
+     select sem.sec_id, sem.sec_external_id_type_id, max_start_dt,
+       case when se.start_dt is null then false else true end as has_newer
+     from sec_max_end_dt_vw sem
+     left join sec_external se
+     on sem.sec_id = se.sec_id
+     and sem.sec_external_id_type_id = se.sec_external_id_type_id
+     and sem.max_start_dt < se.start_dt
+  """).persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("sec_max_end_dt2_vw")
+
+  val secMaxCount = sql("select * from sec_max_end_dt2_vw").count
+  val hasNewerCount = sql("select * from sec_max_end_dt2_vw where has_newer = true").count
+  println(s"For the remaining $secMaxCount unset identifiers, $hasNewerCount have newer identifiers for the same id type and sec_id")
+  sql("select * from sec_max_end_dt2_vw where has_newer = true").show(false)
+
+  sql("""
+    select sem.sec_id, se.sec_external_id, sem.sec_external_id_type_id, se.end_dt
+    from sec_max_end_dt2_vw sem
+    join sec_external se
+    on sem.sec_id = se.sec_id
+    and sem.sec_external_id_type_id = se.sec_external_id_type_id
+    and sem.max_start_dt = se.start_dt
+    and not sem.has_newer
+  """).createOrReplaceTempView("sec_external_max_vw")
+
+  sql("select count(*) from sec_max_end_dt2_vw").show(false)
+  sql("select count(*) from sec_external_max_vw").show(false)
+
+  sql("""
+     select set.sec_external_id, set.country_id, set.temp_sec_id, set.sec_external_id_type_id, set.start_dt,
+       case when set.sec_id is not null then set.sec_id else se.sec_id end as sec_id
+     from sec_external_temp_first_pass_vw set
+     left join sec_external_max_vw se
+     on set.sec_external_id = se.sec_external_id
+     and set.sec_external_id_type_id = se.sec_external_id_type_id
+     and set.start_dt > se.end_dt
+     and set.sec_id is null
+  """).createOrReplaceTempView("sec_external_temp_second_pass_vw")
+
+   val unsetAfterSecondPass = sql("select * from sec_external_temp_second_pass_vw where sec_id is null").count
+   println(s"After second pass, $unsetAfterSecondPass identifiers are still unknown")
+
+   // for the remaining unset entries, join to any identifier that matches
+   sql("""
+      select set.sec_external_id, set.country_id, set.temp_sec_id, set.sec_external_id_type_id, set.start_dt,
+       case when set.sec_id is not null then set.sec_id else se.sec_id end as sec_id
+      from sec_external_temp_second_pass_vw set
+      left join sec_external se
+      on set.sec_external_id = se.sec_external_id
+      and set.sec_external_id_type_id = se.sec_external_id_type_id
+      and set.sec_id is null
+   """).persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("sec_external_temp_third_pass_vw")
+
+   val totalCount = sql("select * from sec_external_temp_vw").count
+   val setCount = sql("select * from sec_external_temp_third_pass_vw").count
+   println(s"Of $totalCount identifiers, $setCount were set")
+
+   // update the sec_ids in the prices entries
+   sql("""
+     select p.temp_sec_id, p.exchange_id, p.sec_price_type_id, p.price, p.price_dt, se.sec_id
+     from prices_temp_vw p
+     left join sec_external_temp_third_pass_vw se
+     on p.temp_sec_id = se.temp_sec_id
+   """).persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("prices_temp_first_pass_vw")
+
+   val totalPriceCount = sql("select * from prices_temp_first_pass_vw").count
+   val unsetPriceCount = sql("select * from prices_temp_first_pass_vw where sec_id is null").count
+   println(s"Of $totalPriceCount prices, $unsetPriceCount have no sec_id")
+
+   // return a dataframe of all price entries where sec_id is set
+   sql("select * from prices_temp_first_pass_vw where sec_id is not null")
+}
+
+val feedIds = Seq(0, 1, 2, 3)
+
+val feedPriceMap = feedIds.map { feedId =>
+  val (secExternalTemp, pricesTemp) = feedId match {
+    case 0 => normalize_feed_0()
+    case 1 => normalize_feed_1()
+    case 2 => normalize_feed_2()
+    case 3 => normalize_feed_3()    
+  }
+  val prices = processFeed(secExternalTemp, pricesTemp)
+  (feedId, prices)
+}.toMap
+
+val r = new Random(7687687L)
+val finalPrices = feedIds.map { idx =>
+  feedPriceMap(idx)
+}.reduceLeft { (df1, df2) =>
+  val df1ViewName = "df1_" + r.alphanumeric.take(5).mkString
+  val df2ViewName = "df2_" + r.alphanumeric.take(5).mkString
+  df1.createOrReplaceTempView(df1ViewName)
+  df2.createOrReplaceTempView(df2ViewName) 
+  sql(s"""
+    select l.*, case when r.sec_id is not null then true else false end as is_dup
+    from $df2ViewName l
+    left join $df1ViewName r
+    on l.sec_id = r.sec_id
+    and l.exchange_id = r.exchange_id
+    and l.sec_price_type_id = r.sec_price_type_id
+    and l.price_dt = r.price_dt
+  """).createOrReplaceTempView(s"${df2ViewName}_flagged_vw")
+
+  val df2TotalCount = sql(s"select * from ${df2ViewName}_flagged_vw").count
+  val df2DupCount = sql(s"select * from ${df2ViewName}_flagged_vw where is_dup").count
+  println(s"Out of $df2TotalCount records in df2, $df2DupCount are dups of df1")
+
+  sql(s"""
+    select temp_sec_id, exchange_id, sec_price_type_id, price, price_dt, sec_id
+    from ${df2ViewName}_flagged_vw
+    where not is_dup
+  """).createOrReplaceTempView(s"${df2ViewName}_no_dups_vw")
+    
+  sql(s"""
+     select *
+     from $df1ViewName
+     union all
+     select *
+     from ${df2ViewName}_no_dups_vw
+   """)
+}
+
+finalPrices.createOrReplaceTempView("final_prices_vw")
+
+// ignore everything that already exists in sec_price
+// probably should use an anti-join here instead, but we want that count of matches
+sql("""
+  select fp.*, case when sp.sec_id is not null then true else false end as already_exists
+  from final_prices_vw fp
+  left join sec_price sp
+  on fp.sec_id = sp.sec_id
+  and fp.exchange_id = sp.exchange_id
+  and fp.sec_price_type_id = sp.sec_price_type_id
+  and fp.price_dt = sp.price_dt
+""").persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("final_prices_marked_vw")
+
+val totalCount = sql("select * from final_prices_marked_vw").count
+val dupCount = sql("select * from final_prices_marked_vw where already_exists = true").count
+println(s"Of $totalCount prices in final_prices_vw, $dupCount already exist in sec_price")
+
+val columnNames = spark.read.table("sec_price").schema.map(_.name).mkString(", ")
+
+sql(s"""
+  select $columnNames
+  from final_prices_marked_vw
+  where sec_id is not null
+  and not already_exists
+""").createOrReplaceTempView("sec_price_new_vw")
+
+// get diffs from previous closing price
+sql(s"""
+  select sec_id, exchange_id, price_info,
+    lag(price_info) over (partition by sec_id, exchange_id order by price_dt) as prev_price_info
+  from (
+    select *, named_struct('price', price, 'price_dt', price_dt) as price_info
+    from (
+      select $columnNames from sec_price_new_vw where sec_price_type_id = 1
+      union all
+      select $columnNames from sec_price where sec_price_type_id = 1
+    )
+  )
+""").createOrReplaceTempView("sec_price_new_with_prev_vw")
+
+sql("""
+  select sec_id, exchange_id, prev_price, prev_price_dt, price, price_dt, perc_diff
+  from (
+    select sec_id, exchange_id, price_info['price'] as price,
+      price_info['price_dt'] as price_dt, prev_price_info['price'] prev_price,
+      prev_price_info['price_dt'] as prev_price_dt,
+      (abs(price_info['price'] - prev_price_info['price'])/prev_price_info['price'])*100 perc_diff
+      from sec_price_new_with_prev_vw
+    where prev_price_info is not null
+  )
+""").createOrReplaceTempView("sec_close_price_diff_vw")
+
+sql(s"""
+  insert overwrite table sec_close_price_diff partition (data_dt = '$dataDateString')
+  select *
+  from sec_close_price_diff_vw
+""")
+
+// get all price dates in the data set and drop the associated partitions in the target if
+// they already exist
+import java.text.SimpleDateFormat
+val formatter = new java.text.SimpleDateFormat("yyyy-MM-dd")
+val priceDates = sql("select distinct price_dt from sec_price_new_vw").collect.map { r => formatter.format(r.getDate(0)) }
+println(s"Price dates are ${priceDates.mkString(",")}")
+
+priceDates.foreach { dateString =>
+   println(s"Dropping partition '$dateString'")
+   sql(s"alter table sec_price drop if exists partition (price_dt='$dateString')")
+}
+
+sql("""
+  insert into sec_price partition (price_dt)
+  select *
+  from sec_price_new_vw
+  distribute by price_dt
+""")
