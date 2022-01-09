@@ -199,72 +199,6 @@ def normalize_feed_2(filenameOpt: Option[String] = None): (DataFrame, DataFrame)
   (secExternalTemp, pricesTemp)
 }
 
-def normalize_feed_3(filenameOpt: Option[String] = None): (DataFrame, DataFrame) = {
-  val price_feed_schema = "ticker string, exchange_code string, price_type, string, time_string string, price decimal(32,9)"
-  val inputFilename = filenameOpt match {
-    case Some(filename) =>
-      filename
-    case _ =>
-      s"$home/testbed/price_test_data/prices_emerging_${dataDateString}.csv"
-  }
-  spark.read.schema(price_feed_schema).csv(inputFilename).createOrReplaceTempView("price_feed_3_vw")
-
-  val exchangeLookupDf = Seq.tabulate(7) { id =>
-    (id, f"US$id%02d")
-  }.toDF("feed_exchange_code_as_int", "exchange_code")
-
-  exchangeLookupDf.createOrReplaceTempView("feed_exchange_code_lookup_vw")
-
-  sql("""
-    select pf.cusip, el.exchange_code, pf.date, pf.open, pf.close, pf.bid, pf.offer, monotonically_increasing_id() temp_sec_id
-    from price_feed_3_vw pf
-    join feed_exchange_code_lookup_vw el
-    on cast(pf.feed_exchange_code as int) = el.feed_exchange_code_as_int
-  """).createOrReplaceTempView("price_feed_3_with_temp_id")
-
-  // create a temporary sec_external, using temp_sec_id to tie it back to the price data
-  val cusip_type_id = sql("select sec_external_id_type_id from sec_external_id_type where name = 'cusip'")
-    .collect()(0)(0) 
-
-  val secExternalTemp = sql(s"""select distinct cusip sec_external_id, -1 country_id, temp_sec_id,
-                                  $cusip_type_id as sec_external_id_type_id, `date` start_dt
-                                from price_feed_3_with_temp_id
-  """)
-
-  // resolve exchange ids
-  sql("""
-    select pf.*, ex.exchange_id
-    from price_feed_3_with_temp_id pf
-    join exchange ex
-    on pf.exchange_code = ex.exchange_code
-  """).createOrReplaceTempView("price_feed_3_with_exchange")
-
-  val priceTypeMap =
-    sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
-
-  val pricesTemp = sql(s"""
-    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
-    from price_feed_3_with_exchange
-    where open > 0
-    union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
-    from price_feed_3_with_exchange
-    where close > 0
-    union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
-    from price_feed_3_with_exchange
-    where offer > 0
-    union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
-    from price_feed_3_with_exchange
-    where bid > 0
-  """)
-  val priceCount = pricesTemp.count
-  println(s"Feed 2 has $priceCount prices")
-
-  (secExternalTemp, pricesTemp)
-}
-
 def processFeed(secExternalTemp: DataFrame, pricesTemp: DataFrame): DataFrame = {
   secExternalTemp.createOrReplaceTempView("sec_external_temp_vw")
   pricesTemp.createOrReplaceTempView("prices_temp_vw")
@@ -368,14 +302,13 @@ def processFeed(secExternalTemp: DataFrame, pricesTemp: DataFrame): DataFrame = 
    sql("select * from prices_temp_first_pass_vw where sec_id is not null")
 }
 
-val feedIds = Seq(0, 1, 2, 3)
+val feedIds = Seq(0, 1, 2)
 
 val feedPriceMap = feedIds.map { feedId =>
   val (secExternalTemp, pricesTemp) = feedId match {
     case 0 => normalize_feed_0()
     case 1 => normalize_feed_1()
-    case 2 => normalize_feed_2()
-    case 3 => normalize_feed_3()    
+    case 2 => normalize_feed_2()    
   }
   val prices = processFeed(secExternalTemp, pricesTemp)
   (feedId, prices)
@@ -421,7 +354,6 @@ val finalPrices = feedIds.map { idx =>
 finalPrices.createOrReplaceTempView("final_prices_vw")
 
 // ignore everything that already exists in sec_price
-// probably should use an anti-join here instead, but we want that count of matches
 sql("""
   select fp.*, case when sp.sec_id is not null then true else false end as already_exists
   from final_prices_vw fp
