@@ -28,8 +28,48 @@ create or replace temp view country_vw (country_id bigint, country_code string) 
 
 create table country using orc as select * from country_vw;
 
-create table sec_price (sec_id bigint, exchange_id bigint, sec_price_type_id bigint, price decimal(32,9), price_dt date) using parquet partitioned by (price_dt);
+create table feed_precedence (feed_id bigint, precedence bigint) using orc;
+insert into feed_precedence
+select * from values
+(2, 1),
+(1, 2),
+(0, 100);
 
-create table sec_price_last (sec_id bigint, exchange_id bigint, sec_price_type_id bigint, price decimal(32,9), price_dt date, data_dt date) using parquet partitioned by (data_dt);
+create table sec_price
+(
+  sec_id bigint,
+  exchange_id bigint,
+  sec_price_type_id bigint,
+  price decimal(32,9),
+  price_dt date,
+  feed_id bigint
+)
+using parquet
+partitioned by (price_dt, feed_id);
 
-create table sec_close_price_diff (sec_id bigint, exchange_id bigint, prev_price decimal(32,9), prev_price_dt date, price decimal(32,9), price_dt date, perc_diff double, data_dt date) using parquet partitioned by (data_dt);
+create table sec_price_last
+(
+  sec_id bigint,
+  exchange_id bigint,
+  sec_price_type_id bigint,
+  price decimal(32,9),
+  price_dt date,
+  feed_id bigint,
+  data_dt date
+) using parquet
+partitioned by (data_dt);
+
+create table sec_close_price_diff
+(
+  sec_id bigint,
+  exchange_id bigint,
+  prev_price decimal(32,9),
+  prev_price_dt date,
+  price decimal(32,9),
+  price_dt date,
+  perc_diff double,
+  data_dt date,
+  feed_id bigint
+)
+using parquet
+partitioned by (data_dt, feed_id);

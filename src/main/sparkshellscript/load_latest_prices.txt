@@ -14,20 +14,43 @@ if (dataDateString == null) {
 
 // create or overwrite last price partition for the data date
 sql(s"""
-  select sec_id, exchange_id, sec_price_type_id, max(price_dt) max_price_dt
+  select sec_id, exchange_id, sec_price_type_id, feed_id, max(price_dt) max_price_dt
   from sec_price
   where price_dt <= '$dataDateString'
-  group by sec_id, exchange_id, sec_price_type_id
+  group by sec_id, exchange_id, sec_price_type_id, feed_id
+""").createOrReplaceTempView("sec_price_max_dt_raw_vw")
+
+
+// assign a rank to each feed_id
+sql("""
+  select sp.*, precedence
+  from sec_price_max_dt_raw_vw sp
+  join feed_precedence fp
+  on sp.feed_id = fp.feed_id
+""").createOrReplaceTempView("sec_price_max_dt_ranked_vw")
+
+// we only care about the highest ranked per sec_id, exchange_id, sec_price_type_id
+sql("""
+  select *
+  from (
+    select sec_id, exchange_id, sec_price_type_id, max_price_dt, feed_id, precedence,
+      row_number() over (partition by sec_id, exchange_id, sec_price_type_id order by precedence asc) as rn
+    from sec_price_max_dt_ranked_vw
+  )
+  where rn = 1
 """).createOrReplaceTempView("sec_price_max_dt_vw")
 
+sql("select * from sec_price_max_dt_vw").show(30, false)
+
 sql(s"""
-  select sp.sec_id, sp.exchange_id, sp.sec_price_type_id, sp.price, sp.price_dt
+  select sp.sec_id, sp.exchange_id, sp.sec_price_type_id, sp.price, sp.price_dt, sp.feed_id
   from sec_price sp
   join sec_price_max_dt_vw spm
   on sp.sec_id = spm.sec_id
   and sp.exchange_id = spm.exchange_id
   and sp.sec_price_type_id = spm.sec_price_type_id
   and sp.price_dt = spm.max_price_dt
+  and sp.feed_id = spm.feed_id
 """).createOrReplaceTempView("sec_price_last_vw")
 
 val columnNames2 = spark.read.table("sec_price_last").schema.map(_.name).init.mkString(", ")

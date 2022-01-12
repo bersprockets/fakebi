@@ -53,19 +53,19 @@ def normalize_feed_0(filenameOpt: Option[String] = None): (DataFrame, DataFrame)
     sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
 
   val pricesTemp = sql(s"""
-    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt, 0L as feed_id
     from price_feed_0_with_exchange
     where open > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt, 0L as feed_id
     from price_feed_0_with_exchange
     where close > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt, 0L as feed_id
     from price_feed_0_with_exchange
     where offer > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt, 0L as feed_id
     from price_feed_0_with_exchange
     where bid > 0
   """)
@@ -111,19 +111,19 @@ def normalize_feed_1(filenameOpt: Option[String] = None): (DataFrame, DataFrame)
     sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
 
   val pricesTemp = sql(s"""
-    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt, 1L as feed_id
     from price_feed_1_with_exchange
     where open > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt, 1L as feed_id
     from price_feed_1_with_exchange
     where close > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt, 1L as feed_id
     from price_feed_1_with_exchange
     where offer > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt, 1L as feed_id
     from price_feed_1_with_exchange
     where bid > 0
   """)
@@ -177,19 +177,19 @@ def normalize_feed_2(filenameOpt: Option[String] = None): (DataFrame, DataFrame)
     sql("select sec_price_type_code, sec_price_type_id from sec_price_type").collect.map(x => (x(0), x(1))).toMap 
 
   val pricesTemp = sql(s"""
-    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("open")} as sec_price_type_id, open as price, date as price_dt, 2L as feed_id
     from price_feed_2_with_exchange
     where open > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("close")} as sec_price_type_id, close as price, date as price_dt, 2L as feed_id
     from price_feed_2_with_exchange
     where close > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("offer")} as sec_price_type_id, offer as price, date as price_dt, 2L as feed_id
     from price_feed_2_with_exchange
     where offer > 0
     union all
-    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt
+    select temp_sec_id, exchange_id, ${priceTypeMap("bid")} as sec_price_type_id, bid as price, date as price_dt, 2L as feed_id
     from price_feed_2_with_exchange
     where bid > 0
   """)
@@ -288,7 +288,7 @@ def processFeed(secExternalTemp: DataFrame, pricesTemp: DataFrame): DataFrame = 
 
    // update the sec_ids in the prices entries
    sql("""
-     select p.temp_sec_id, p.exchange_id, p.sec_price_type_id, p.price, p.price_dt, se.sec_id
+     select p.temp_sec_id, p.exchange_id, p.sec_price_type_id, p.price, p.price_dt, p.feed_id, se.sec_id
      from prices_temp_vw p
      left join sec_external_temp_third_pass_vw se
      on p.temp_sec_id = se.temp_sec_id
@@ -322,32 +322,13 @@ val finalPrices = feedIds.map { idx =>
   val df2ViewName = "df2_" + r.alphanumeric.take(5).mkString
   df1.createOrReplaceTempView(df1ViewName)
   df2.createOrReplaceTempView(df2ViewName) 
-  sql(s"""
-    select l.*, case when r.sec_id is not null then true else false end as is_dup
-    from $df2ViewName l
-    left join $df1ViewName r
-    on l.sec_id = r.sec_id
-    and l.exchange_id = r.exchange_id
-    and l.sec_price_type_id = r.sec_price_type_id
-    and l.price_dt = r.price_dt
-  """).createOrReplaceTempView(s"${df2ViewName}_flagged_vw")
 
-  val df2TotalCount = sql(s"select * from ${df2ViewName}_flagged_vw").count
-  val df2DupCount = sql(s"select * from ${df2ViewName}_flagged_vw where is_dup").count
-  println(s"Out of $df2TotalCount records in df2, $df2DupCount are dups of df1")
-
-  sql(s"""
-    select temp_sec_id, exchange_id, sec_price_type_id, price, price_dt, sec_id
-    from ${df2ViewName}_flagged_vw
-    where not is_dup
-  """).createOrReplaceTempView(s"${df2ViewName}_no_dups_vw")
-    
   sql(s"""
      select *
      from $df1ViewName
      union all
      select *
-     from ${df2ViewName}_no_dups_vw
+     from $df2ViewName
    """)
 }
 
@@ -362,6 +343,7 @@ sql("""
   and fp.exchange_id = sp.exchange_id
   and fp.sec_price_type_id = sp.sec_price_type_id
   and fp.price_dt = sp.price_dt
+  and fp.feed_id = sp.feed_id
 """).persist(StorageLevel.DISK_ONLY).createOrReplaceTempView("final_prices_marked_vw")
 
 val totalCount = sql("select * from final_prices_marked_vw").count
@@ -379,8 +361,8 @@ sql(s"""
 
 // get diffs from previous closing price
 sql(s"""
-  select sec_id, exchange_id, price_info,
-    lag(price_info) over (partition by sec_id, exchange_id order by price_dt) as prev_price_info
+  select sec_id, exchange_id, feed_id, price_info,
+    lag(price_info) over (partition by sec_id, exchange_id, feed_id order by price_dt) as prev_price_info
   from (
     select *, named_struct('price', price, 'price_dt', price_dt) as price_info
     from (
@@ -392,38 +374,43 @@ sql(s"""
 """).createOrReplaceTempView("sec_price_new_with_prev_vw")
 
 sql("""
-  select sec_id, exchange_id, prev_price, prev_price_dt, price, price_dt, perc_diff
+  select sec_id, exchange_id, prev_price, prev_price_dt, price, price_dt, perc_diff, feed_id
   from (
     select sec_id, exchange_id, price_info['price'] as price,
       price_info['price_dt'] as price_dt, prev_price_info['price'] prev_price,
       prev_price_info['price_dt'] as prev_price_dt,
-      (abs(price_info['price'] - prev_price_info['price'])/prev_price_info['price'])*100 perc_diff
+      (abs(price_info['price'] - prev_price_info['price'])/prev_price_info['price'])*100 perc_diff,
+      feed_id
       from sec_price_new_with_prev_vw
     where prev_price_info is not null
   )
 """).createOrReplaceTempView("sec_close_price_diff_vw")
 
 sql(s"""
-  insert overwrite table sec_close_price_diff partition (data_dt = '$dataDateString')
-  select *
+  insert overwrite table sec_close_price_diff partition (data_dt, feed_id)
+  select sec_id, exchange_id, prev_price, prev_price_dt, price, price_dt, perc_diff,
+    cast('$dataDateString' as date) as data_dt, feed_id
   from sec_close_price_diff_vw
+  distribute by feed_id
 """)
 
 // get all price dates in the data set and drop the associated partitions in the target if
 // they already exist
 import java.text.SimpleDateFormat
 val formatter = new java.text.SimpleDateFormat("yyyy-MM-dd")
-val priceDates = sql("select distinct price_dt from sec_price_new_vw").collect.map { r => formatter.format(r.getDate(0)) }
-println(s"Price dates are ${priceDates.mkString(",")}")
+val partitions = sql("select distinct price_dt, feed_id from sec_price_new_vw").collect.map { r =>
+  (formatter.format(r.getDate(0)), r.getLong(1))
+}  
+println(s"partitions are ${partitions.mkString(",")}")
 
-priceDates.foreach { dateString =>
-   println(s"Dropping partition '$dateString'")
-   sql(s"alter table sec_price drop if exists partition (price_dt='$dateString')")
+partitions.foreach { case (price_dt, feed_id) =>
+   println(s"Dropping partition '$price_dt', $feed_id")
+   sql(s"alter table sec_price drop if exists partition (price_dt='$price_dt', feed_id=$feed_id)")
 }
 
 sql("""
-  insert into sec_price partition (price_dt)
+  insert into sec_price partition (price_dt, feed_id)
   select *
   from sec_price_new_vw
-  distribute by price_dt
+  distribute by price_dt, feed_id
 """)
